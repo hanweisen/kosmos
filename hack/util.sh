@@ -21,6 +21,7 @@ CLUSTERLINK_TARGET_SOURCE=(
   kosmosctl=cmd/kosmosctl
   clusterlink-floater=cmd/floater
   clusterlink-network-manager=cmd/network-manager
+  knode-manager=cmd/knode-manager
 )
 
 #https://textkool.com/en/ascii-art-generator?hl=default&vl=default&font=DOS%20Rebel&text=ClusterLink

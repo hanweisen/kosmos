@@ -14,6 +14,8 @@ type KosmosV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	ClustersGetter
 	ClusterNodesGetter
+	DaemonSetsGetter
+	DaemonSetRevesGetter
 	KnodesGetter
 	NodeConfigsGetter
 }
@@ -29,6 +31,14 @@ func (c *KosmosV1alpha1Client) Clusters() ClusterInterface {
 
 func (c *KosmosV1alpha1Client) ClusterNodes() ClusterNodeInterface {
 	return newClusterNodes(c)
+}
+
+func (c *KosmosV1alpha1Client) DaemonSets(namespace string) DaemonSetInterface {
+	return newDaemonSets(c, namespace)
+}
+
+func (c *KosmosV1alpha1Client) DaemonSetReves(namespace string) DaemonSetRefInterface {
+	return newDaemonSetReves(c, namespace)
 }
 
 func (c *KosmosV1alpha1Client) Knodes() KnodeInterface {

@@ -15,6 +15,7 @@ TARGETS :=  clusterlink-controller-manager  \
 			clusterlink-floater \
 			clusterlink-network-manager \
 			clusterlink-proxy \
+			knode-manager \
 
 CTL_TARGETS := kosmosctl
 

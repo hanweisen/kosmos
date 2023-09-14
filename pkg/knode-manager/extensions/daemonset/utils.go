@@ -1,0 +1,65 @@
+package daemonset
+
+import (
+	"strconv"
+
+	apps "k8s.io/api/apps/v1"
+	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
+
+	kosmosv1alpha1 "github.com/kosmos.io/kosmos/pkg/apis/kosmos/v1alpha1"
+)
+
+// GetTemplateGeneration gets the template generation associated with a v1.DaemonSet by extracting it from the
+// deprecated annotation. If no annotation is found nil is returned. If the annotation is found and fails to parse
+// nil is returned with an error. If the generation can be parsed from the annotation, a pointer to the parsed int64
+// value is returned.
+func GetTemplateGeneration(ds *kosmosv1alpha1.DaemonSetRef) (*int64, error) {
+	annotation, found := ds.DaemonSet.Annotations[apps.DeprecatedTemplateGeneration]
+	if !found {
+		return nil, nil
+	}
+	generation, err := strconv.ParseInt(annotation, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &generation, nil
+}
+
+// UnavailableCount returns 0 if unavailability is not requested, the expected
+// unavailability number to allow out of numberToSchedule if requested, or an error if
+// the unavailability percentage requested is invalid.
+func UnavailableCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (int, error) {
+	if ds.DaemonSet.Spec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
+		return 0, nil
+	}
+	r := ds.DaemonSet.Spec.UpdateStrategy.RollingUpdate
+	if r == nil {
+		return 0, nil
+	}
+	return intstrutil.GetScaledValueFromIntOrPercent(r.MaxUnavailable, numberToSchedule, true)
+}
+
+// SurgeCount returns 0 if surge is not requested, the expected surge number to allow
+// out of numberToSchedule if surge is configured, or an error if the surge percentage
+// requested is invalid.
+func SurgeCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (int, error) {
+	if ds.DaemonSet.Spec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
+		return 0, nil
+	}
+
+	r := ds.DaemonSet.Spec.UpdateStrategy.RollingUpdate
+	if r == nil {
+		return 0, nil
+	}
+	// If surge is not requested, we should default to 0.
+	if r.MaxSurge == nil {
+		return 0, nil
+	}
+	return intstrutil.GetScaledValueFromIntOrPercent(r.MaxSurge, numberToSchedule, true)
+}
+
+// AllowsSurge returns true if the daemonset allows more than a single pod on any node.
+func AllowsSurge(ds *kosmosv1alpha1.DaemonSetRef) bool {
+	maxSurge, err := SurgeCount(ds, 1)
+	return err == nil && maxSurge > 0
+}

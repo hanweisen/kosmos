@@ -12,6 +12,10 @@ type Interface interface {
 	Clusters() ClusterInformer
 	// ClusterNodes returns a ClusterNodeInformer.
 	ClusterNodes() ClusterNodeInformer
+	// DaemonSets returns a DaemonSetInformer.
+	DaemonSets() DaemonSetInformer
+	// DaemonSetReves returns a DaemonSetRefInformer.
+	DaemonSetReves() DaemonSetRefInformer
 	// Knodes returns a KnodeInformer.
 	Knodes() KnodeInformer
 	// NodeConfigs returns a NodeConfigInformer.
@@ -37,6 +41,16 @@ func (v *version) Clusters() ClusterInformer {
 // ClusterNodes returns a ClusterNodeInformer.
 func (v *version) ClusterNodes() ClusterNodeInformer {
 	return &clusterNodeInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// DaemonSets returns a DaemonSetInformer.
+func (v *version) DaemonSets() DaemonSetInformer {
+	return &daemonSetInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// DaemonSetReves returns a DaemonSetRefInformer.
+func (v *version) DaemonSetReves() DaemonSetRefInformer {
+	return &daemonSetRefInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // Knodes returns a KnodeInformer.

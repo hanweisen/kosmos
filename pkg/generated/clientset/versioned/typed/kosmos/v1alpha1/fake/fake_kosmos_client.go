@@ -20,6 +20,14 @@ func (c *FakeKosmosV1alpha1) ClusterNodes() v1alpha1.ClusterNodeInterface {
 	return &FakeClusterNodes{c}
 }
 
+func (c *FakeKosmosV1alpha1) DaemonSets(namespace string) v1alpha1.DaemonSetInterface {
+	return &FakeDaemonSets{c, namespace}
+}
+
+func (c *FakeKosmosV1alpha1) DaemonSetReves(namespace string) v1alpha1.DaemonSetRefInterface {
+	return &FakeDaemonSetReves{c, namespace}
+}
+
 func (c *FakeKosmosV1alpha1) Knodes() v1alpha1.KnodeInterface {
 	return &FakeKnodes{c}
 }
