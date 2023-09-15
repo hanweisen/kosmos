@@ -18,14 +18,6 @@ type DaemonSetListerExpansion interface{}
 // DaemonSetNamespaceLister.
 type DaemonSetNamespaceListerExpansion interface{}
 
-// DaemonSetRefListerExpansion allows custom methods to be added to
-// DaemonSetRefLister.
-type DaemonSetRefListerExpansion interface{}
-
-// DaemonSetRefNamespaceListerExpansion allows custom methods to be added to
-// DaemonSetRefNamespaceLister.
-type DaemonSetRefNamespaceListerExpansion interface{}
-
 // KnodeListerExpansion allows custom methods to be added to
 // KnodeLister.
 type KnodeListerExpansion interface{}
@@ -33,3 +25,11 @@ type KnodeListerExpansion interface{}
 // NodeConfigListerExpansion allows custom methods to be added to
 // NodeConfigLister.
 type NodeConfigListerExpansion interface{}
+
+// ShadowDaemonSetListerExpansion allows custom methods to be added to
+// ShadowDaemonSetLister.
+type ShadowDaemonSetListerExpansion interface{}
+
+// ShadowDaemonSetNamespaceListerExpansion allows custom methods to be added to
+// ShadowDaemonSetNamespaceLister.
+type ShadowDaemonSetNamespaceListerExpansion interface{}

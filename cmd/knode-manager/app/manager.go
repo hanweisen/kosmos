@@ -15,7 +15,6 @@ import (
 
 	"github.com/kosmos.io/kosmos/cmd/knode-manager/app/config"
 	"github.com/kosmos.io/kosmos/cmd/knode-manager/app/options"
-	knodemanager "github.com/kosmos.io/kosmos/pkg/knode-manager"
 	"github.com/kosmos.io/kosmos/pkg/knode-manager/extensions/daemonset"
 )
 
@@ -52,14 +51,10 @@ func NewKosmosNodeManagerCommand(ctx context.Context) *cobra.Command {
 }
 
 func Run(ctx context.Context, c *config.Config) error {
-	knManager := knodemanager.NewManager(c)
-	hostDaemonSetsController, err := daemonset.NewHostDaemonSetsControllerFromConfig(c)
-	if err != nil {
-		return err
-	}
+	//knManager := knodemanager.NewManager(c)
 	if !c.LeaderElection.LeaderElect {
-		knManager.Run(c.WorkerNumber, ctx.Done())
-		go hostDaemonSetsController.Run(ctx, defaultWorkNum)
+		//knManager.Run(c.WorkerNumber, ctx.Done())
+		daemonset.StartHostDaemonSetsController(ctx, c,defaultWorkNum)
 		return nil
 	}
 
@@ -97,9 +92,9 @@ func Run(ctx context.Context, c *config.Config) error {
 				done = make(chan struct{})
 				defer close(done)
 
-				stopCh := ctx.Done()
-				knManager.Run(c.WorkerNumber, stopCh)
-				go hostDaemonSetsController.Run(ctx, defaultWorkNum)
+				//stopCh := ctx.Done()
+				//knManager.Run(c.WorkerNumber, stopCh)
+				daemonset.StartHostDaemonSetsController(ctx, c,defaultWorkNum)
 			},
 			OnStoppedLeading: func() {
 				klogv3.Info("leaderelection lost")

@@ -26,7 +26,7 @@ import (
 
 // rollingUpdate identifies the set of old pods to delete, or additional pods to create on nodes,
 // remaining within the constraints imposed by the update strategy.
-func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, nodeList []*v1.Node, hash string) error {
+func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, nodeList []*v1.Node, hash string) error {
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)
@@ -68,14 +68,14 @@ func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosm
 				numUnavailable++
 			case newPod != nil:
 				// this pod is up to date, check its availability
-				if !podutil.IsPodAvailable(newPod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: now}) {
+				if !podutil.IsPodAvailable(newPod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: now}) {
 					// an unavailable new pod is counted against maxUnavailable
 					numUnavailable++
 				}
 			default:
 				// this pod is old, it is an update candidate
 				switch {
-				case !podutil.IsPodAvailable(oldPod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: now}):
+				case !podutil.IsPodAvailable(oldPod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: now}):
 					// the old pod isn't available, so it needs to be replaced
 					klog.V(5).Infof("DaemonSet %s/%s pod %s on node %s is out of date and not available, allowing replacement", ds.Namespace, ds.Name, oldPod.Name, nodeName)
 					// record the replacement
@@ -143,7 +143,7 @@ func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosm
 		case newPod == nil:
 			// this is a surge candidate
 			switch {
-			case !podutil.IsPodAvailable(oldPod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: now}):
+			case !podutil.IsPodAvailable(oldPod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: now}):
 				// the old pod isn't available, allow it to become a replacement
 				klog.V(5).Infof("Pod %s on node %s is out of date and not available, allowing replacement", ds.Namespace, ds.Name, oldPod.Name, nodeName)
 				// record the replacement
@@ -164,7 +164,7 @@ func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosm
 			}
 		default:
 			// we have already surged onto this node, determine our state
-			if !podutil.IsPodAvailable(newPod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: now}) {
+			if !podutil.IsPodAvailable(newPod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: now}) {
 				// we're waiting to go available here
 				numSurge++
 				continue
@@ -193,7 +193,7 @@ func (dsc *HostDaemonSetsController) rollingUpdate(ctx context.Context, ds *kosm
 // is at most one of each old and new pods, or false if there are multiples. We can skip
 // processing the particular node in those scenarios and let the manage loop prune the
 // excess pods for our next time around.
-func findUpdatedPodsOnNode(ds *kosmosv1alpha1.DaemonSetRef, podsOnNode []*v1.Pod, hash string) (newPod, oldPod *v1.Pod, ok bool) {
+func findUpdatedPodsOnNode(ds *kosmosv1alpha1.ShadowDaemonSet, podsOnNode []*v1.Pod, hash string) (newPod, oldPod *v1.Pod, ok bool) {
 	for _, pod := range podsOnNode {
 		if pod.DeletionTimestamp != nil {
 			continue
@@ -221,7 +221,7 @@ func findUpdatedPodsOnNode(ds *kosmosv1alpha1.DaemonSetRef, podsOnNode []*v1.Pod
 // constructHistory finds all histories controlled by the given DaemonSet, and
 // update current history revision number, or create current history if need to.
 // It also deduplicates current history, and adds missing unique labels to existing histories.
-func (dsc *HostDaemonSetsController) constructHistory(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef) (cur *apps.ControllerRevision, old []*apps.ControllerRevision, err error) {
+func (dsc *HostDaemonSetsController) constructHistory(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet) (cur *apps.ControllerRevision, old []*apps.ControllerRevision, err error) {
 	var histories []*apps.ControllerRevision
 	var currentHistories []*apps.ControllerRevision
 	histories, err = dsc.controlledHistories(ctx, ds)
@@ -278,13 +278,14 @@ func (dsc *HostDaemonSetsController) constructHistory(ctx context.Context, ds *k
 	return cur, old, err
 }
 
-func (dsc *HostDaemonSetsController) cleanupHistory(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, old []*apps.ControllerRevision) error {
+func (dsc *HostDaemonSetsController) cleanupHistory(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, old []*apps.ControllerRevision) error {
 	nodesToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)
 	}
 
-	toKeep := int(*ds.DaemonSet.Spec.RevisionHistoryLimit)
+	//TODO set default number
+	toKeep := int(*ds.DaemonSetSpec.RevisionHistoryLimit)
 	toKill := len(old) - toKeep
 	if toKill <= 0 {
 		return nil
@@ -330,7 +331,7 @@ func maxRevision(histories []*apps.ControllerRevision) int64 {
 	return max
 }
 
-func (dsc *HostDaemonSetsController) dedupCurHistories(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, curHistories []*apps.ControllerRevision) (*apps.ControllerRevision, error) {
+func (dsc *HostDaemonSetsController) dedupCurHistories(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, curHistories []*apps.ControllerRevision) (*apps.ControllerRevision, error) {
 	if len(curHistories) == 1 {
 		return curHistories[0], nil
 	}
@@ -384,8 +385,8 @@ func (dsc *HostDaemonSetsController) dedupCurHistories(ctx context.Context, ds *
 // This also reconciles ControllerRef by adopting/orphaning.
 // Note that returned histories are pointers to objects in the cache.
 // If you want to modify one, you need to deep-copy it first.
-func (dsc *HostDaemonSetsController) controlledHistories(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef) ([]*apps.ControllerRevision, error) {
-	selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSet.Spec.Selector)
+func (dsc *HostDaemonSetsController) controlledHistories(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet) ([]*apps.ControllerRevision, error) {
+	selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSetSpec.Selector)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +416,7 @@ func (dsc *HostDaemonSetsController) controlledHistories(ctx context.Context, ds
 
 // TODO pay attentation here
 // Match check if the given DaemonSet's template matches the template stored in the given history.
-func Match(ds *kosmosv1alpha1.DaemonSetRef, history *apps.ControllerRevision) (bool, error) {
+func Match(ds *kosmosv1alpha1.ShadowDaemonSet, history *apps.ControllerRevision) (bool, error) {
 	patch, err := getPatch(ds)
 	if err != nil {
 		return false, err
@@ -428,7 +429,7 @@ func Match(ds *kosmosv1alpha1.DaemonSetRef, history *apps.ControllerRevision) (b
 // previous version. If the returned error is nil the patch is valid. The current state that we save is just the
 // PodSpecTemplate. We can modify this later to encompass more state (or less) and remain compatible with previously
 // recorded patches.
-func getPatch(ds *kosmosv1alpha1.DaemonSetRef) ([]byte, error) {
+func getPatch(ds *kosmosv1alpha1.ShadowDaemonSet) ([]byte, error) {
 	dsBytes, err := json.Marshal(ds)
 	if err != nil {
 		return nil, err
@@ -441,9 +442,8 @@ func getPatch(ds *kosmosv1alpha1.DaemonSetRef) ([]byte, error) {
 	objCopy := make(map[string]interface{})
 	specCopy := make(map[string]interface{})
 
-	daemonSet := raw["daemonSet"].(map[string]interface{})
 	// Create a patch of the DaemonSet that replaces spec.template
-	spec := daemonSet["spec"].(map[string]interface{})
+	spec := raw["daemonSetSpec"].(map[string]interface{})
 	template := spec["template"].(map[string]interface{})
 	specCopy["template"] = template
 	template["$patch"] = "replace"
@@ -453,18 +453,18 @@ func getPatch(ds *kosmosv1alpha1.DaemonSetRef) ([]byte, error) {
 }
 
 // TODO pay attention here
-func (dsc *HostDaemonSetsController) snapshot(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, revision int64) (*apps.ControllerRevision, error) {
+func (dsc *HostDaemonSetsController) snapshot(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, revision int64) (*apps.ControllerRevision, error) {
 	patch, err := getPatch(ds)
 	if err != nil {
 		return nil, err
 	}
-	hash := controller.ComputeHash(&ds.DaemonSet.Spec.Template, ds.DaemonSet.Status.CollisionCount)
+	hash := controller.ComputeHash(&ds.DaemonSetSpec.Template, ds.DaemonSetStatus.CollisionCount)
 	name := ds.Name + "-" + hash
 	history := &apps.ControllerRevision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            name,
 			Namespace:       ds.Namespace,
-			Labels:          labelsutil.CloneAndAddLabel(ds.DaemonSet.Spec.Template.Labels, apps.DefaultDaemonSetUniqueLabelKey, hash),
+			Labels:          labelsutil.CloneAndAddLabel(ds.DaemonSetSpec.Template.Labels, apps.DefaultDaemonSetUniqueLabelKey, hash),
 			Annotations:     ds.Annotations,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(ds, controllerKind)},
 		},
@@ -495,8 +495,8 @@ func (dsc *HostDaemonSetsController) snapshot(ctx context.Context, ds *kosmosv1a
 			return nil, getErr
 		}
 		// If the collision count used to compute hash was in fact stale, there's no need to bump collision count; retry again
-		if !reflect.DeepEqual(currDS.Status.CollisionCount, ds.DaemonSet.Status.CollisionCount) {
-			return nil, fmt.Errorf("found a stale collision count (%d, expected %d) of DaemonSet %q while processing; will retry until it is updated", ds.DaemonSet.Status.CollisionCount, currDS.Status.CollisionCount, ds.Name)
+		if !reflect.DeepEqual(currDS.Status.CollisionCount, ds.DaemonSetStatus.CollisionCount) {
+			return nil, fmt.Errorf("found a stale collision count (%d, expected %d) of DaemonSet %q while processing; will retry until it is updated", ds.DaemonSetStatus.CollisionCount, currDS.Status.CollisionCount, ds.Name)
 		}
 		if currDS.Status.CollisionCount == nil {
 			currDS.Status.CollisionCount = new(int32)
@@ -514,7 +514,7 @@ func (dsc *HostDaemonSetsController) snapshot(ctx context.Context, ds *kosmosv1a
 
 // updatedDesiredNodeCounts calculates the true number of allowed unavailable or surge pods and
 // updates the nodeToDaemonPods array to include an empty array for every node that is not scheduled.
-func (dsc *HostDaemonSetsController) updatedDesiredNodeCounts(ds *kosmosv1alpha1.DaemonSetRef, nodeList []*v1.Node, nodeToDaemonPods map[string][]*v1.Pod) (int, int, error) {
+func (dsc *HostDaemonSetsController) updatedDesiredNodeCounts(ds *kosmosv1alpha1.ShadowDaemonSet, nodeList []*v1.Node, nodeToDaemonPods map[string][]*v1.Pod) (int, int, error) {
 	var desiredNumberScheduled int
 	for i := range nodeList {
 		node := nodeList[i]

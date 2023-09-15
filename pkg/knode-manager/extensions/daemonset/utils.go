@@ -13,8 +13,8 @@ import (
 // deprecated annotation. If no annotation is found nil is returned. If the annotation is found and fails to parse
 // nil is returned with an error. If the generation can be parsed from the annotation, a pointer to the parsed int64
 // value is returned.
-func GetTemplateGeneration(ds *kosmosv1alpha1.DaemonSetRef) (*int64, error) {
-	annotation, found := ds.DaemonSet.Annotations[apps.DeprecatedTemplateGeneration]
+func GetTemplateGeneration(ds *kosmosv1alpha1.ShadowDaemonSet) (*int64, error) {
+	annotation, found := ds.Annotations[apps.DeprecatedTemplateGeneration]
 	if !found {
 		return nil, nil
 	}
@@ -28,11 +28,11 @@ func GetTemplateGeneration(ds *kosmosv1alpha1.DaemonSetRef) (*int64, error) {
 // UnavailableCount returns 0 if unavailability is not requested, the expected
 // unavailability number to allow out of numberToSchedule if requested, or an error if
 // the unavailability percentage requested is invalid.
-func UnavailableCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (int, error) {
-	if ds.DaemonSet.Spec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
+func UnavailableCount(ds *kosmosv1alpha1.ShadowDaemonSet, numberToSchedule int) (int, error) {
+	if ds.DaemonSetSpec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
 		return 0, nil
 	}
-	r := ds.DaemonSet.Spec.UpdateStrategy.RollingUpdate
+	r := ds.DaemonSetSpec.UpdateStrategy.RollingUpdate
 	if r == nil {
 		return 0, nil
 	}
@@ -42,12 +42,12 @@ func UnavailableCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (in
 // SurgeCount returns 0 if surge is not requested, the expected surge number to allow
 // out of numberToSchedule if surge is configured, or an error if the surge percentage
 // requested is invalid.
-func SurgeCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (int, error) {
-	if ds.DaemonSet.Spec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
+func SurgeCount(ds *kosmosv1alpha1.ShadowDaemonSet, numberToSchedule int) (int, error) {
+	if ds.DaemonSetSpec.UpdateStrategy.Type != apps.RollingUpdateDaemonSetStrategyType {
 		return 0, nil
 	}
 
-	r := ds.DaemonSet.Spec.UpdateStrategy.RollingUpdate
+	r := ds.DaemonSetSpec.UpdateStrategy.RollingUpdate
 	if r == nil {
 		return 0, nil
 	}
@@ -59,7 +59,7 @@ func SurgeCount(ds *kosmosv1alpha1.DaemonSetRef, numberToSchedule int) (int, err
 }
 
 // AllowsSurge returns true if the daemonset allows more than a single pod on any node.
-func AllowsSurge(ds *kosmosv1alpha1.DaemonSetRef) bool {
+func AllowsSurge(ds *kosmosv1alpha1.ShadowDaemonSet) bool {
 	maxSurge, err := SurgeCount(ds, 1)
 	return err == nil && maxSurge > 0
 }

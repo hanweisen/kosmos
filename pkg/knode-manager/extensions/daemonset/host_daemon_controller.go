@@ -89,11 +89,11 @@ type HostDaemonSetsController struct {
 	// To allow injection of syncDaemonSet for testing.
 	syncHandler func(ctx context.Context, dsKey string) error
 	// used for unit testing
-	enqueueDaemonSet func(ds *kosmosv1alpha1.DaemonSetRef)
+	enqueueDaemonSet func(ds *kosmosv1alpha1.ShadowDaemonSet)
 	// A TTLCache of pod creates/deletes each ds expects to see
 	expectations controller.ControllerExpectationsInterface
 	// dsLister can list/get daemonsetRefs from the shared informer's store
-	dsLister kosmoslister.DaemonSetRefLister
+	dsLister kosmoslister.ShadowDaemonSetLister
 	// dsStoreSynced returns true if the daemonset store has been synced at least once.
 	// Added as a member to the struct to allow injection for testing.
 	dsStoreSynced cache.InformerSynced
@@ -119,7 +119,7 @@ type HostDaemonSetsController struct {
 	failedPodsBackoff *flowcontrol.Backoff
 }
 
-func NewHostDaemonSetsControllerFromConfig(c *config.Config) (*HostDaemonSetsController, error) {
+func StartHostDaemonSetsController(ctx context.Context, c *config.Config, workNum int) (*HostDaemonSetsController, error) {
 	kubeClient, err := clientset.NewForConfig(c.KubeConfig)
 	if err != nil {
 		klog.Errorf("Unable to create kubeClient: %v", err)
@@ -129,7 +129,7 @@ func NewHostDaemonSetsControllerFromConfig(c *config.Config) (*HostDaemonSetsCon
 	kosmosFactory := externalversions.NewSharedInformerFactory(c.CRDClient, 0)
 
 	controller, err := NewHostDaemonSetsController(
-		kosmosFactory.Kosmos().V1alpha1().DaemonSetReves(),
+		kosmosFactory.Kosmos().V1alpha1().ShadowDaemonSets(),
 		kubeFactory.Apps().V1().ControllerRevisions(),
 		kubeFactory.Core().V1().Pods(),
 		kubeFactory.Core().V1().Nodes(),
@@ -137,15 +137,18 @@ func NewHostDaemonSetsControllerFromConfig(c *config.Config) (*HostDaemonSetsCon
 		kubeClient,
 		flowcontrol.NewBackOff(1*time.Second, 15*time.Minute),
 	)
+	kubeFactory.Start(ctx.Done())
+	kosmosFactory.Start(ctx.Done())
 	if err != nil {
 		return nil, err
 	}
+	go controller.Run(ctx, workNum)
 	return controller, nil
 }
 
 // NewHostDaemonSetsController creates a new DaemonSetsController
 func NewHostDaemonSetsController(
-	daemonSetRefInformer kosmosinformer.DaemonSetRefInformer,
+	daemonSetRefInformer kosmosinformer.ShadowDaemonSetInformer,
 	historyInformer appsinformers.ControllerRevisionInformer,
 	podInformer coreinformers.PodInformer,
 	nodeInformer coreinformers.NodeInformer,
@@ -217,14 +220,14 @@ func NewHostDaemonSetsController(
 }
 
 func (dsc *HostDaemonSetsController) addDaemonset(obj interface{}) {
-	ds := obj.(*kosmosv1alpha1.DaemonSetRef)
+	ds := obj.(*kosmosv1alpha1.ShadowDaemonSet)
 	klog.V(4).Infof("Adding daemon set %s", ds.Name)
 	dsc.enqueueDaemonSet(ds)
 }
 
 func (dsc *HostDaemonSetsController) updateDaemonset(cur, old interface{}) {
-	oldDS := old.(*kosmosv1alpha1.DaemonSetRef)
-	curDS := cur.(*kosmosv1alpha1.DaemonSetRef)
+	oldDS := old.(*kosmosv1alpha1.ShadowDaemonSet)
+	curDS := cur.(*kosmosv1alpha1.ShadowDaemonSet)
 
 	// TODO: make a KEP and fix informers to always call the delete event handler on re-create
 	if curDS.UID != oldDS.UID {
@@ -244,14 +247,14 @@ func (dsc *HostDaemonSetsController) updateDaemonset(cur, old interface{}) {
 }
 
 func (dsc *HostDaemonSetsController) deleteDaemonset(obj interface{}) {
-	ds, ok := obj.(*apps.DaemonSet)
+	ds, ok := obj.(*kosmosv1alpha1.ShadowDaemonSet)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			utilruntime.HandleError(fmt.Errorf("couldn't get object from tombstone %#v", obj))
 			return
 		}
-		ds, ok = tombstone.Obj.(*apps.DaemonSet)
+		ds, ok = tombstone.Obj.(*kosmosv1alpha1.ShadowDaemonSet)
 		if !ok {
 			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a DaemonSet %#v", obj))
 			return
@@ -281,10 +284,10 @@ func (dsc *HostDaemonSetsController) Run(ctx context.Context, workers int) {
 
 	defer dsc.queue.ShutDown()
 
-	klog.Infof("Starting daemon sets controller")
+	klog.Infof("Starting host-daemonsetref controller")
 	defer klog.Infof("Shutting down daemon sets controller")
 
-	if !cache.WaitForNamedCacheSync("daemon sets", ctx.Done(), dsc.podStoreSynced, dsc.nodeStoreSynced, dsc.historyStoreSynced, dsc.dsStoreSynced) {
+	if !cache.WaitForNamedCacheSync("deamonsetref", ctx.Done(), dsc.podStoreSynced, dsc.nodeStoreSynced, dsc.historyStoreSynced, dsc.dsStoreSynced) {
 		return
 	}
 
@@ -322,7 +325,7 @@ func (dsc *HostDaemonSetsController) processNextWorkItem(ctx context.Context) bo
 	return true
 }
 
-func (dsc *HostDaemonSetsController) enqueue(ds *kosmosv1alpha1.DaemonSetRef) {
+func (dsc *HostDaemonSetsController) enqueue(ds *kosmosv1alpha1.ShadowDaemonSet) {
 	key, err := controller.KeyFunc(ds)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("Couldn't get key for object %#v: %v", ds, err))
@@ -345,7 +348,7 @@ func (dsc *HostDaemonSetsController) enqueueDaemonSetAfter(obj interface{}, afte
 }
 
 // getDaemonSetsForPod returns a list of DaemonSets that potentially match the pod.
-func (dsc *HostDaemonSetsController) getDaemonSetsForPod(pod *v1.Pod) []*kosmosv1alpha1.DaemonSetRef {
+func (dsc *HostDaemonSetsController) getDaemonSetsForPod(pod *v1.Pod) []*kosmosv1alpha1.ShadowDaemonSet {
 	sets, err := getPodDaemonSets(pod, dsc.dsLister)
 	if err != nil {
 		return nil
@@ -360,7 +363,7 @@ func (dsc *HostDaemonSetsController) getDaemonSetsForPod(pod *v1.Pod) []*kosmosv
 
 // getDaemonSetsForHistory returns a list of DaemonSets that potentially
 // match a ControllerRevision.
-func (dsc *HostDaemonSetsController) getDaemonSetsForHistory(history *apps.ControllerRevision) []*kosmosv1alpha1.DaemonSetRef {
+func (dsc *HostDaemonSetsController) getDaemonSetsForHistory(history *apps.ControllerRevision) []*kosmosv1alpha1.ShadowDaemonSet {
 	daemonSets, err := GetHistoryDaemonSets(history, dsc.dsLister)
 	if err != nil || len(daemonSets) == 0 {
 		return nil
@@ -571,10 +574,10 @@ func (dsc *HostDaemonSetsController) updatePod(old, cur interface{}) {
 		dsc.enqueueDaemonSet(ds)
 		changedToReady := !podutil.IsPodReady(oldPod) && podutil.IsPodReady(curPod)
 		// See https://github.com/kubernetes/kubernetes/pull/38076 for more details
-		if changedToReady && ds.DaemonSet.Spec.MinReadySeconds > 0 {
+		if changedToReady && ds.DaemonSetSpec.MinReadySeconds > 0 {
 			// Add a second to avoid milliseconds skew in AddAfter.
 			// See https://github.com/kubernetes/kubernetes/issues/39785#issuecomment-279959133 for more info.
-			dsc.enqueueDaemonSetAfter(ds, (time.Duration(ds.DaemonSet.Spec.MinReadySeconds)*time.Second)+time.Second)
+			dsc.enqueueDaemonSetAfter(ds, (time.Duration(ds.DaemonSetSpec.MinReadySeconds)*time.Second)+time.Second)
 		}
 		return
 	}
@@ -711,8 +714,8 @@ func (dsc *HostDaemonSetsController) updateNode(old, cur interface{}) {
 // This also reconciles ControllerRef by adopting/orphaning.
 // Note that returned Pods are pointers to objects in the cache.
 // If you want to modify one, you need to deep-copy it first.
-func (dsc *HostDaemonSetsController) getDaemonPods(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef) ([]*v1.Pod, error) {
-	selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSet.Spec.Selector)
+func (dsc *HostDaemonSetsController) getDaemonPods(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet) ([]*v1.Pod, error) {
+	selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSetSpec.Selector)
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +748,7 @@ func (dsc *HostDaemonSetsController) getDaemonPods(ctx context.Context, ds *kosm
 // This also reconciles ControllerRef by adopting/orphaning.
 // Note that returned Pods are pointers to objects in the cache.
 // If you want to modify one, you need to deep-copy it first.
-func (dsc *HostDaemonSetsController) getNodesToDaemonPods(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef) (map[string][]*v1.Pod, error) {
+func (dsc *HostDaemonSetsController) getNodesToDaemonPods(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet) (map[string][]*v1.Pod, error) {
 	claimedPods, err := dsc.getDaemonPods(ctx, ds)
 	if err != nil {
 		return nil, err
@@ -769,13 +772,13 @@ func (dsc *HostDaemonSetsController) getNodesToDaemonPods(ctx context.Context, d
 // resolveControllerRef returns the controller referenced by a ControllerRef,
 // or nil if the ControllerRef could not be resolved to a matching controller
 // of the correct Kind.
-func (dsc *HostDaemonSetsController) resolveControllerRef(namespace string, controllerRef *metav1.OwnerReference) *kosmosv1alpha1.DaemonSetRef {
+func (dsc *HostDaemonSetsController) resolveControllerRef(namespace string, controllerRef *metav1.OwnerReference) *kosmosv1alpha1.ShadowDaemonSet {
 	// We can't look up by UID, so look up by Name and then verify UID.
 	// Don't even try to look up by Name if it's the wrong Kind.
 	if controllerRef.Kind != controllerKind.Kind {
 		return nil
 	}
-	ds, err := dsc.dsLister.DaemonSetReves(namespace).Get(controllerRef.Name)
+	ds, err := dsc.dsLister.ShadowDaemonSets(namespace).Get(controllerRef.Name)
 	if err != nil {
 		return nil
 	}
@@ -794,7 +797,7 @@ func (dsc *HostDaemonSetsController) resolveControllerRef(namespace string, cont
 func (dsc *HostDaemonSetsController) podsShouldBeOnNode(
 	node *v1.Node,
 	nodeToDaemonPods map[string][]*v1.Pod,
-	ds *kosmosv1alpha1.DaemonSetRef,
+	ds *kosmosv1alpha1.ShadowDaemonSet,
 	hash string,
 ) (nodesNeedingDaemonPods, podsToDelete []string) {
 	shouldRun, shouldContinueRunning := NodeShouldRunDaemonPod(node, ds)
@@ -886,7 +889,7 @@ func (dsc *HostDaemonSetsController) podsShouldBeOnNode(
 			case !podutil.IsPodReady(oldestOldPod):
 				klog.V(5).Infof("Pod %s/%s from daemonset %s is no longer ready and will be replaced with newer pod %s", oldestOldPod.Namespace, oldestOldPod.Name, ds.Name, oldestNewPod.Name)
 				podsToDelete = append(podsToDelete, oldestOldPod.Name)
-			case podutil.IsPodAvailable(oldestNewPod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: dsc.failedPodsBackoff.Clock.Now()}):
+			case podutil.IsPodAvailable(oldestNewPod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: dsc.failedPodsBackoff.Clock.Now()}):
 				klog.V(5).Infof("Pod %s/%s from daemonset %s is now ready and will replace older pod %s", oldestNewPod.Namespace, oldestNewPod.Name, ds.Name, oldestOldPod.Name)
 				podsToDelete = append(podsToDelete, oldestOldPod.Name)
 			}
@@ -905,7 +908,7 @@ func (dsc *HostDaemonSetsController) podsShouldBeOnNode(
 	return nodesNeedingDaemonPods, podsToDelete
 }
 
-func (dsc *HostDaemonSetsController) updateDaemonSet(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, nodeList []*v1.Node, hash, key string, old []*apps.ControllerRevision) error {
+func (dsc *HostDaemonSetsController) updateDaemonSet(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, nodeList []*v1.Node, hash, key string, old []*apps.ControllerRevision) error {
 	err := dsc.manage(ctx, ds, nodeList, hash)
 	if err != nil {
 		return err
@@ -913,7 +916,7 @@ func (dsc *HostDaemonSetsController) updateDaemonSet(ctx context.Context, ds *ko
 
 	// Process rolling updates if we're ready.
 	if dsc.expectations.SatisfiedExpectations(key) {
-		switch ds.DaemonSet.Spec.UpdateStrategy.Type {
+		switch ds.DaemonSetSpec.UpdateStrategy.Type {
 		case apps.OnDeleteDaemonSetStrategyType:
 		case apps.RollingUpdateDaemonSetStrategyType:
 			err = dsc.rollingUpdate(ctx, ds, nodeList, hash)
@@ -935,7 +938,7 @@ func (dsc *HostDaemonSetsController) updateDaemonSet(ctx context.Context, ds *ko
 // After figuring out which nodes should run a Pod of ds but not yet running one and
 // which nodes should not run a Pod of ds but currently running one, it calls function
 // syncNodes with a list of pods to remove and a list of nodes to run a Pod of ds.
-func (dsc *HostDaemonSetsController) manage(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, nodeList []*v1.Node, hash string) error {
+func (dsc *HostDaemonSetsController) manage(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, nodeList []*v1.Node, hash string) error {
 	// Find out the pods which are created for the nodes by DaemonSet.
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds)
 	if err != nil {
@@ -967,7 +970,7 @@ func (dsc *HostDaemonSetsController) manage(ctx context.Context, ds *kosmosv1alp
 
 // syncNodes deletes given pods and creates new daemon set pods on the given nodes
 // returns slice with errors if any
-func (dsc *HostDaemonSetsController) syncNodes(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, podsToDelete, nodesNeedingDaemonPods []string, hash string) error {
+func (dsc *HostDaemonSetsController) syncNodes(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, podsToDelete, nodesNeedingDaemonPods []string, hash string) error {
 	// We need to set expectations before creating/deleting pods to avoid race conditions.
 	dsKey, err := controller.KeyFunc(ds)
 	if err != nil {
@@ -998,7 +1001,7 @@ func (dsc *HostDaemonSetsController) syncNodes(ctx context.Context, ds *kosmosv1
 	if err != nil {
 		generation = nil
 	}
-	template := util.CreatePodTemplate(ds.DaemonSet.Spec.Template, generation, hash)
+	template := util.CreatePodTemplate(ds.DaemonSetSpec.Template, generation, hash)
 	// Batch the pod creates. Batch sizes start at SlowStartInitialBatchSize
 	// and double with each successful iteration in a kind of "slow start".
 	// This handles attempts to start large numbers of pods that would
@@ -1082,7 +1085,7 @@ func (dsc *HostDaemonSetsController) syncNodes(ctx context.Context, ds *kosmosv1
 func storeDaemonSetStatus(
 	ctx context.Context,
 	kosmosClient versioned.Interface,
-	ds *kosmosv1alpha1.DaemonSetRef, desiredNumberScheduled,
+	ds *kosmosv1alpha1.ShadowDaemonSet, desiredNumberScheduled,
 	currentNumberScheduled,
 	numberMisscheduled,
 	numberReady,
@@ -1090,14 +1093,14 @@ func storeDaemonSetStatus(
 	numberAvailable,
 	numberUnavailable int,
 	updateObservedGen bool) error {
-	if int(ds.DaemonSet.Status.DesiredNumberScheduled) == desiredNumberScheduled &&
-		int(ds.DaemonSet.Status.CurrentNumberScheduled) == currentNumberScheduled &&
-		int(ds.DaemonSet.Status.NumberMisscheduled) == numberMisscheduled &&
-		int(ds.DaemonSet.Status.NumberReady) == numberReady &&
-		int(ds.DaemonSet.Status.UpdatedNumberScheduled) == updatedNumberScheduled &&
-		int(ds.DaemonSet.Status.NumberAvailable) == numberAvailable &&
-		int(ds.DaemonSet.Status.NumberUnavailable) == numberUnavailable &&
-		ds.DaemonSet.Status.ObservedGeneration >= ds.Generation {
+	if int(ds.DaemonSetStatus.DesiredNumberScheduled) == desiredNumberScheduled &&
+		int(ds.DaemonSetStatus.CurrentNumberScheduled) == currentNumberScheduled &&
+		int(ds.DaemonSetStatus.NumberMisscheduled) == numberMisscheduled &&
+		int(ds.DaemonSetStatus.NumberReady) == numberReady &&
+		int(ds.DaemonSetStatus.UpdatedNumberScheduled) == updatedNumberScheduled &&
+		int(ds.DaemonSetStatus.NumberAvailable) == numberAvailable &&
+		int(ds.DaemonSetStatus.NumberUnavailable) == numberUnavailable &&
+		ds.DaemonSetStatus.ObservedGeneration >= ds.Generation {
 		return nil
 	}
 
@@ -1106,18 +1109,18 @@ func storeDaemonSetStatus(
 	var updateErr, getErr error
 	for i := 0; ; i++ {
 		if updateObservedGen {
-			toUpdate.DaemonSet.Status.ObservedGeneration = ds.Generation
+			toUpdate.DaemonSetStatus.ObservedGeneration = ds.Generation
 		}
-		toUpdate.DaemonSet.Status.DesiredNumberScheduled = int32(desiredNumberScheduled)
-		toUpdate.DaemonSet.Status.CurrentNumberScheduled = int32(currentNumberScheduled)
-		toUpdate.DaemonSet.Status.NumberMisscheduled = int32(numberMisscheduled)
-		toUpdate.DaemonSet.Status.NumberReady = int32(numberReady)
-		toUpdate.DaemonSet.Status.UpdatedNumberScheduled = int32(updatedNumberScheduled)
-		toUpdate.DaemonSet.Status.NumberAvailable = int32(numberAvailable)
-		toUpdate.DaemonSet.Status.NumberUnavailable = int32(numberUnavailable)
+		toUpdate.DaemonSetStatus.DesiredNumberScheduled = int32(desiredNumberScheduled)
+		toUpdate.DaemonSetStatus.CurrentNumberScheduled = int32(currentNumberScheduled)
+		toUpdate.DaemonSetStatus.NumberMisscheduled = int32(numberMisscheduled)
+		toUpdate.DaemonSetStatus.NumberReady = int32(numberReady)
+		toUpdate.DaemonSetStatus.UpdatedNumberScheduled = int32(updatedNumberScheduled)
+		toUpdate.DaemonSetStatus.NumberAvailable = int32(numberAvailable)
+		toUpdate.DaemonSetStatus.NumberUnavailable = int32(numberUnavailable)
 
 		//if _, updateErr = kosmosClient.UpdateStatus(ctx, toUpdate, metav1.UpdateOptions{}); updateErr == nil {
-		if _, updateErr = kosmosClient.KosmosV1alpha1().DaemonSetReves(toUpdate.Namespace).Update(ctx, toUpdate, metav1.UpdateOptions{}); updateErr == nil {
+		if _, updateErr = kosmosClient.KosmosV1alpha1().ShadowDaemonSets(toUpdate.Namespace).Update(ctx, toUpdate, metav1.UpdateOptions{}); updateErr == nil {
 			return nil
 		}
 
@@ -1127,7 +1130,7 @@ func storeDaemonSetStatus(
 		}
 		// Update the set with the latest resource version for the next poll
 		//if toUpdate, getErr = kosmosClient.Get(ctx, ds.Name, metav1.GetOptions{}); getErr != nil {
-		if toUpdate, getErr = kosmosClient.KosmosV1alpha1().DaemonSetReves(ds.Namespace).Get(ctx, ds.Name, metav1.GetOptions{}); getErr != nil {
+		if toUpdate, getErr = kosmosClient.KosmosV1alpha1().ShadowDaemonSets(ds.Namespace).Get(ctx, ds.Name, metav1.GetOptions{}); getErr != nil {
 			// If the GET fails we can't trust status.Replicas anymore. This error
 			// is bound to be more interesting than the update failure.
 			return getErr
@@ -1136,7 +1139,7 @@ func storeDaemonSetStatus(
 	return updateErr
 }
 
-func (dsc *HostDaemonSetsController) updateDaemonSetStatus(ctx context.Context, ds *kosmosv1alpha1.DaemonSetRef, nodeList []*v1.Node, hash string, updateObservedGen bool) error {
+func (dsc *HostDaemonSetsController) updateDaemonSetStatus(ctx context.Context, ds *kosmosv1alpha1.ShadowDaemonSet, nodeList []*v1.Node, hash string, updateObservedGen bool) error {
 	klog.V(4).Infof("Updating daemon set status")
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds)
 	if err != nil {
@@ -1162,7 +1165,7 @@ func (dsc *HostDaemonSetsController) updateDaemonSetStatus(ctx context.Context, 
 			pod := daemonPods[0]
 			if podutil.IsPodReady(pod) {
 				numberReady++
-				if podutil.IsPodAvailable(pod, ds.DaemonSet.Spec.MinReadySeconds, metav1.Time{Time: now}) {
+				if podutil.IsPodAvailable(pod, ds.DaemonSetSpec.MinReadySeconds, metav1.Time{Time: now}) {
 					numberAvailable++
 				}
 			}
@@ -1189,8 +1192,8 @@ func (dsc *HostDaemonSetsController) updateDaemonSetStatus(ctx context.Context, 
 	}
 
 	// Resync the DaemonSet after MinReadySeconds as a last line of defense to guard against clock-skew.
-	if ds.DaemonSet.Spec.MinReadySeconds > 0 && numberReady != numberAvailable {
-		dsc.enqueueDaemonSetAfter(ds, time.Duration(ds.DaemonSet.Spec.MinReadySeconds)*time.Second)
+	if ds.DaemonSetSpec.MinReadySeconds > 0 && numberReady != numberAvailable {
+		dsc.enqueueDaemonSetAfter(ds, time.Duration(ds.DaemonSetSpec.MinReadySeconds)*time.Second)
 	}
 	return nil
 }
@@ -1206,7 +1209,7 @@ func (dsc *HostDaemonSetsController) syncDaemonSet(ctx context.Context, key stri
 	if err != nil {
 		return err
 	}
-	ds, err := dsc.dsLister.DaemonSetReves(namespace).Get(name)
+	ds, err := dsc.dsLister.ShadowDaemonSets(namespace).Get(name)
 
 	if apierrors.IsNotFound(err) {
 		klog.V(3).Infof("daemon set has been deleted %v", key)
@@ -1223,7 +1226,7 @@ func (dsc *HostDaemonSetsController) syncDaemonSet(ctx context.Context, key stri
 	}
 
 	everything := metav1.LabelSelector{}
-	if reflect.DeepEqual(ds.DaemonSet.Spec.Selector, &everything) {
+	if reflect.DeepEqual(ds.DaemonSetSpec.Selector, &everything) {
 		dsc.eventRecorder.Eventf(ds, v1.EventTypeWarning, SelectingAllReason, "This daemon set is selecting all pods. A non-empty selector is required.")
 		return nil
 	}
@@ -1285,12 +1288,11 @@ func (dsc *HostDaemonSetsController) syncDaemonSet(ctx context.Context, key stri
 //   - shouldContinueRunning:
 //     Returns true when a daemonset should continue running on a node if a daemonset pod is already
 //     running on that node.
-func NodeShouldRunDaemonPod(node *v1.Node, dsr *kosmosv1alpha1.DaemonSetRef) (bool, bool) {
-	ds := &dsr.DaemonSet
+func NodeShouldRunDaemonPod(node *v1.Node, ds *kosmosv1alpha1.ShadowDaemonSet) (bool, bool) {
 	pod := NewPod(ds, node.Name)
 
 	// If the daemon set specifies a node name, check that it matches with node.Name.
-	if !(ds.Spec.Template.Spec.NodeName == "" || ds.Spec.Template.Spec.NodeName == node.Name) {
+	if !(ds.DaemonSetSpec.Template.Spec.NodeName == "" || ds.DaemonSetSpec.Template.Spec.NodeName == node.Name) {
 		return false, false
 	}
 
@@ -1324,8 +1326,8 @@ func predicates(pod *v1.Pod, node *v1.Node, taints []v1.Taint) (fitsNodeName, fi
 }
 
 // NewPod creates a new pod
-func NewPod(ds *kosmosv1alpha1.DaemonSet, nodeName string) *v1.Pod {
-	newPod := &v1.Pod{Spec: ds.Spec.Template.Spec, ObjectMeta: ds.Spec.Template.ObjectMeta}
+func NewPod(ds *kosmosv1alpha1.ShadowDaemonSet, nodeName string) *v1.Pod {
+	newPod := &v1.Pod{Spec: ds.DaemonSetSpec.Template.Spec, ObjectMeta: ds.DaemonSetSpec.Template.ObjectMeta}
 	newPod.Namespace = ds.Namespace
 	newPod.Spec.NodeName = nodeName
 
@@ -1356,8 +1358,8 @@ func (o podByCreationTimestampAndPhase) Less(i, j int) bool {
 	return o[i].CreationTimestamp.Before(&o[j].CreationTimestamp)
 }
 
-func failedPodsBackoffKey(ds *kosmosv1alpha1.DaemonSetRef, nodeName string) string {
-	return fmt.Sprintf("%s/%d/%s", ds.UID, ds.DaemonSet.Status.ObservedGeneration, nodeName)
+func failedPodsBackoffKey(ds *kosmosv1alpha1.ShadowDaemonSet, nodeName string) string {
+	return fmt.Sprintf("%s/%d/%s", ds.UID, ds.DaemonSetStatus.ObservedGeneration, nodeName)
 }
 
 // getUnscheduledPodsWithoutNode returns list of unscheduled pods assigned to not existing nodes.
@@ -1383,26 +1385,26 @@ func getUnscheduledPodsWithoutNode(runningNodesList []*v1.Node, nodeToDaemonPods
 	return results
 }
 
-func getPodDaemonSets(pod *v1.Pod, lister kosmoslister.DaemonSetRefLister) ([]*kosmosv1alpha1.DaemonSetRef, error) {
+func getPodDaemonSets(pod *v1.Pod, lister kosmoslister.ShadowDaemonSetLister) ([]*kosmosv1alpha1.ShadowDaemonSet, error) {
 	var selector labels.Selector
-	var daemonSetRef *kosmosv1alpha1.DaemonSetRef
+	var daemonSetRef *kosmosv1alpha1.ShadowDaemonSet
 
 	if len(pod.Labels) == 0 {
 		return nil, fmt.Errorf("no daemon sets found for pod %v because it has no labels", pod.Name)
 	}
 
-	list, err := lister.DaemonSetReves(pod.Namespace).List(labels.Everything())
+	list, err := lister.ShadowDaemonSets(pod.Namespace).List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 
-	var daemonSets []*kosmosv1alpha1.DaemonSetRef
+	var daemonSets []*kosmosv1alpha1.ShadowDaemonSet
 	for i := range list {
 		daemonSetRef = list[i]
 		if daemonSetRef.Namespace != pod.Namespace {
 			continue
 		}
-		selector, err = metav1.LabelSelectorAsSelector(daemonSetRef.DaemonSet.Spec.Selector)
+		selector, err = metav1.LabelSelectorAsSelector(daemonSetRef.DaemonSetSpec.Selector)
 		if err != nil {
 			// This object has an invalid selector, it does not match the pod
 			continue
@@ -1426,19 +1428,19 @@ func getPodDaemonSets(pod *v1.Pod, lister kosmoslister.DaemonSetRefLister) ([]*k
 // match a ControllerRevision. Only the one specified in the ControllerRevision's ControllerRef
 // will actually manage it.
 // Returns an error only if no matching DaemonSets are found.
-func GetHistoryDaemonSets(history *apps.ControllerRevision, s kosmoslister.DaemonSetRefLister) ([]*kosmosv1alpha1.DaemonSetRef, error) {
+func GetHistoryDaemonSets(history *apps.ControllerRevision, s kosmoslister.ShadowDaemonSetLister) ([]*kosmosv1alpha1.ShadowDaemonSet, error) {
 	if len(history.Labels) == 0 {
 		return nil, fmt.Errorf("no DaemonSet found for ControllerRevision %s because it has no labels", history.Name)
 	}
 
-	list, err := s.DaemonSetReves(history.Namespace).List(labels.Everything())
+	list, err := s.ShadowDaemonSets(history.Namespace).List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 
-	var daemonSets []*kosmosv1alpha1.DaemonSetRef
+	var daemonSets []*kosmosv1alpha1.ShadowDaemonSet
 	for _, ds := range list {
-		selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSet.Spec.Selector)
+		selector, err := metav1.LabelSelectorAsSelector(ds.DaemonSetSpec.Selector)
 		if err != nil {
 			// This object has an invalid selector, it does not match the history
 			continue

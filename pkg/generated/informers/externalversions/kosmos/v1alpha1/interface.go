@@ -14,12 +14,12 @@ type Interface interface {
 	ClusterNodes() ClusterNodeInformer
 	// DaemonSets returns a DaemonSetInformer.
 	DaemonSets() DaemonSetInformer
-	// DaemonSetReves returns a DaemonSetRefInformer.
-	DaemonSetReves() DaemonSetRefInformer
 	// Knodes returns a KnodeInformer.
 	Knodes() KnodeInformer
 	// NodeConfigs returns a NodeConfigInformer.
 	NodeConfigs() NodeConfigInformer
+	// ShadowDaemonSets returns a ShadowDaemonSetInformer.
+	ShadowDaemonSets() ShadowDaemonSetInformer
 }
 
 type version struct {
@@ -48,11 +48,6 @@ func (v *version) DaemonSets() DaemonSetInformer {
 	return &daemonSetInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// DaemonSetReves returns a DaemonSetRefInformer.
-func (v *version) DaemonSetReves() DaemonSetRefInformer {
-	return &daemonSetRefInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
 // Knodes returns a KnodeInformer.
 func (v *version) Knodes() KnodeInformer {
 	return &knodeInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
@@ -61,4 +56,9 @@ func (v *version) Knodes() KnodeInformer {
 // NodeConfigs returns a NodeConfigInformer.
 func (v *version) NodeConfigs() NodeConfigInformer {
 	return &nodeConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// ShadowDaemonSets returns a ShadowDaemonSetInformer.
+func (v *version) ShadowDaemonSets() ShadowDaemonSetInformer {
+	return &shadowDaemonSetInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
